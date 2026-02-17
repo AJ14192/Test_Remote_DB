@@ -1,0 +1,21 @@
+{
+  "name": "test_remote_db",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {},
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@playwright/test": "^1.57.0",
+    "@types/mssql": "^9.1.9",
+    "@types/node": "^25.0.8",
+    "@types/ssh2": "^1.15.5",
+    "dotenv": "^17.2.3"
+  },
+  "dependencies": {
+    "mssql": "^12.2.0",
+    "ssh2": "^1.17.0"
+  }
+}
