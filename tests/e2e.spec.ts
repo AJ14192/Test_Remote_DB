@@ -1,7 +1,9 @@
 import { test, expect } from '@playwright/test';
 import dotenv from 'dotenv';
 import { createSshTunnel, closeSshTunnel } from '../utils/ssh-tunnel';
-import { getDbPool, withTransaction, upsertFeatureFlag, getFeatureFlag } from '../utils/db';
+import sql from 'mssql';
+import { DbClient } from '../utils/db-client';
+
 
 dotenv.config();
 
@@ -16,9 +18,9 @@ test.describe('E2E with remote MSSQL via SSH', () => {
         sshHost: process.env.SSH_HOST!,
         sshPort: Number(process.env.SSH_PORT || '22'),
         sshUser: process.env.SSH_USER!,
-        sshPrivateKey: process.env.SSH_PRIVATE_KEY,
+        sshPrivateKey: process.env.SSH_PRIVATE_KEY?.replace(/\\n/g, '\n'),
         sshPassword: process.env.SSH_PASSWORD,
-        dstHost: process.env.DB_HOST!, // MSSQL host as seen from remote machine
+        dstHost: process.env.DB_HOST!,
         dstPort: Number(process.env.DB_PORT!),
         localPort: 0,
       });
@@ -30,10 +32,13 @@ test.describe('E2E with remote MSSQL via SSH', () => {
   });
 
   test('DB change reflected in UI (MSSQL)', async ({ page }) => {
+
+    // ✅ Step 1: Decide DB host/port (SSH or direct)
     const dbHost = sshHandle ? '127.0.0.1' : process.env.DB_HOST!;
     const dbPort = sshHandle ? sshHandle.localPort : Number(process.env.DB_PORT!);
 
-    const pool = await getDbPool({
+    // ✅ Step 2: Create DB client
+    const db = new DbClient({
       server: dbHost,
       port: dbPort,
       user: process.env.DB_USER!,
@@ -42,13 +47,17 @@ test.describe('E2E with remote MSSQL via SSH', () => {
       encrypt: process.env.DB_ENCRYPT === 'true',
     });
 
-    const flagKey = `new_checkout_flow_pw`;
+    await db.connect();
 
-    await withTransaction(pool, async (trx) => {
-      await upsertFeatureFlag(trx, flagKey, true);
-    });
+    // ✅ Step 3: Update DB BEFORE UI login
+    await db.query(
+      `UPDATE users SET is_active = 1 WHERE email = @email`,
+      [
+        { name: 'email', type: sql.VarChar, value: process.env.WEB_USER }
+      ]
+    );
 
-    // UI flow
+    // ✅ Step 4: UI Flow
     await page.goto('/login');
     await page.getByLabel('Email').fill(process.env.WEB_USER!);
     await page.getByLabel('Password').fill(process.env.WEB_PASS!);
@@ -56,13 +65,21 @@ test.describe('E2E with remote MSSQL via SSH', () => {
 
     await expect(page.getByText(/Dashboard/i)).toBeVisible();
 
-    await page.goto('/checkout');
-    await expect(page.getByTestId('new-checkout')).toBeVisible();
+    // Example: verify UI reflects DB change
+    await page.goto('/profile');
+    await expect(page.getByText('Active User')).toBeVisible();
 
-    // Optional DB verification
-    const flagValue = await getFeatureFlag(pool, flagKey);
-    expect(flagValue).toBe(true);
+    // ✅ Optional DB verification
+    const result = await db.query(
+      `SELECT is_active FROM users WHERE email = @email`,
+      [
+        { name: 'email', type: sql.VarChar, value: process.env.WEB_USER }
+      ]
+    );
 
-    await pool.close();
+    expect(result[0].is_active).toBe(true);
+
+    // ✅ Step 5: Close DB connection
+    await db.close();
   });
 });
